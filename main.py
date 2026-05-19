@@ -152,7 +152,7 @@ if uploaded_file is not None:
                     with st.spinner("Syncing records into Google Sheets..."):
                         gc = connect_to_sheets()
                         if gc:
-                            spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAIc"
+                            spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAlc"
                             
                             try:
                                 sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
