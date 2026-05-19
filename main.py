@@ -45,7 +45,6 @@ def connect_to_sheets():
         return gc
     except Exception as e:
         st.error(f"❌ Failed to authenticate with Google Sheets API: {e}")
-        st.info("Check if your secrets configuration under [gspread.service_account] has any missing fields.")
         return None
 
 # ==========================================
@@ -58,7 +57,6 @@ st.title("📋 Caravan Attendance Automation")
 st.write("Upload an image of your handwritten sheet to instantly read and sync data with your Google Sheet.")
 st.write("---")
 
-# File uploader widget
 uploaded_file = st.file_uploader("Upload Log Sheet Image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
@@ -83,10 +81,10 @@ if uploaded_file is not None:
         Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        # Smart retry handler tracking both 503 (overloaded) and 429 (rate limits)
+        # High-resilience loop explicitly built to scale past 429 quota cooling windows
         response = None
-        max_retries = 4
-        wait_time = 5  # Start with a baseline 5-second delay
+        max_retries = 5
+        wait_time = 35  # Set a 35s baseline to align with Google's minute-rate limit window
         
         for attempt in range(max_retries):
             try:
@@ -100,14 +98,13 @@ if uploaded_file is not None:
                 )
                 break 
             except APIError as e:
-                # Handle temporary traffic spikes or cooling rate-limit windows
-                if ("503" in str(e) or "429" in str(e)) and attempt < max_retries - 1:
-                    status_text.warning(f"⚠️ API Limit hit or server busy. Backing off and retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})")
+                if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
+                    status_text.warning(f"⚠️ Rate limit cooling window active. Waiting {wait_time}s to auto-retry... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
-                    wait_time *= 3  # Dynamically increase wait period exponentially (5s -> 15s -> 45s)
+                    wait_time += 15  # Steadily increase buffer time to guarantee window clearance
                 else:
                     st.error(f"❌ Google API Quota/Error: {e}")
-                    st.info("If this is a permanent 429 error, your daily limit of 20 images has completely reset. Consider linking a Google Cloud billing account for unlimited scale.")
+                    st.info("💡 Pro-Tip: To completely skip daily reset blocks, link a credit card to your Google AI Studio account under Pay-As-You-Go ($0.0003 per image call).")
                     st.stop()
             except Exception as e:
                 st.error(f"❌ An unexpected error occurred: {e}")
@@ -118,10 +115,8 @@ if uploaded_file is not None:
                 json_data = json.loads(response.text)
                 status_text.success("✨ Image Successfully Processed!")
                 
-                # Display Extracted Info Header
                 st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
                 
-                # Build list cleanly matching your precise Google Sheet Headers
                 raw_records = json_data.get("records", [])
                 cleaned_records = []
                 
@@ -133,7 +128,6 @@ if uploaded_file is not None:
 
                 df = pd.DataFrame(cleaned_records, dtype=str)
                 
-                # Data Preview Grid
                 st.subheader("🔍 Parsed Data Preview")
                 st.dataframe(df, use_container_width=True)
                 
@@ -155,9 +149,9 @@ if uploaded_file is not None:
                                 st.success("🎉 Data successfully synced into your 'Caravan Attendance' spreadsheet!")
                                 
                             except gspread.exceptions.SpreadsheetNotFound:
-                                st.error("❌ Spreadsheet Not Found! Ensure your Google Cloud Service Account Email has been added as an 'Editor' on your Google Sheet sharing configurations.")
+                                st.error("❌ Spreadsheet Not Found! Check email editing permissions.")
                             except Exception as e:
                                 st.error(f"❌ Sync failed: {e}")
                                 
             except json.JSONDecodeError:
-                status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured. Please try uploading again.")
+                status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured.")
