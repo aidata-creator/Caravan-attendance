@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from PIL import Image
+import io
 import json
 import gspread
 import time
@@ -58,19 +59,35 @@ st.write("---")
 uploaded_file = st.file_uploader("Upload Log Sheet Image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file)
+    raw_image = Image.open(uploaded_file)
     
     col1, col2 = st.columns([1, 2])
     
     with col1:
         st.subheader("📸 Uploaded Image")
-        st.image(image, use_container_width=True)
+        st.image(raw_image, use_container_width=True)
         
     with col2:
         st.subheader("⚡ Automation Status")
         status_text = st.empty()
-        status_text.info("Reading handwriting using Gemini 2.5 Flash... Please wait.")
+        status_text.info("Optimizing image and connecting to Gemini 2.5 Flash...")
         
+        # 🛠️ LIVE IMAGE COMPRESSION ENGINE
+        # Reduces image footprint to prevent request exhaustion blocks
+        try:
+            img_buffer = io.BytesIO()
+            # Convert to RGB mode if image is PNG/RGBA to allow JPEG saving
+            if raw_image.mode in ("RGBA", "P"):
+                processing_img = raw_image.convert("RGB")
+            else:
+                processing_img = raw_image
+                
+            processing_img.save(img_buffer, format="JPEG", quality=75, optimize=True)
+            optimized_image = Image.open(img_buffer)
+        except Exception as e:
+            st.warning(f"⚠️ Image compression skipped: {e}")
+            optimized_image = raw_image
+
         prompt = """
         You are an expert handwriting transcription assistant. Look at the uploaded image and carefully extract all items.
         1. Find the log sheet date written at the top.
@@ -81,14 +98,13 @@ if uploaded_file is not None:
         
         response = None
         max_retries = 3
-        wait_time = 10 
+        wait_time = 15 
         
-        # Streamlined retry system for rate limit cooling windows (429/503)
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=[image, prompt],
+                    contents=[optimized_image, prompt],
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=AttendanceLog,
@@ -97,11 +113,12 @@ if uploaded_file is not None:
                 break 
             except APIError as e:
                 if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
-                    status_text.warning(f"⚠️ API is cooling down. Waiting {wait_time}s to auto-retry... (Attempt {attempt + 1}/{max_retries})")
+                    status_text.warning(f"⚠️ Request cooling window active. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     wait_time *= 2
                 else:
                     st.error(f"❌ Google API Error: {e}")
+                    st.info("💡 **Quick Fix:** To bypass project constraints entirely, go to Google AI Studio, click the top-left project dropdown, create a **completely new project workspace**, and generate a key there!")
                     st.stop()
             except Exception as e:
                 st.error(f"❌ An unexpected error occurred: {e}")
