@@ -6,7 +6,20 @@ import gspread
 import time
 from google.oauth2.service_account import Credentials
 from google import genai
+from google.genai import types
 from google.genai.errors import APIError
+from pydantic import BaseModel
+
+# ==========================================
+# Pydantic Schemas for Structured Output
+# ==========================================
+class AttendanceRecord(BaseModel):
+    name: str
+    cp_no: str
+
+class AttendanceLog(BaseModel):
+    date: str
+    records: list[AttendanceRecord]
 
 # ==========================================
 # 1. API & CREDENTIALS INITIALIZATION
@@ -26,7 +39,7 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Pulls the structured dict directly from the new streamlined TOML format
+        # Pulls the structured dict directly from the streamlined TOML format
         secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
@@ -64,21 +77,11 @@ if uploaded_file is not None:
         status_text.info("Reading handwriting using Gemini... Please wait.")
         
         prompt = """
-        You are a highly accurate handwritten document transcription engine.
-        Look closely at this log sheet image and extract all entries.
+        You are an expert handwriting transcription assistant. Look at the uploaded image and carefully extract all items.
+        1. Find the log sheet date written at the top.
+        2. Transcribe every single person's Name and their CP no. (Contact/Phone Number). 
         
-        Extract the information and structure it strictly into this JSON format:
-        {
-          "date": "Extracted date at the top of the sheet",
-          "records": [
-             {"name": "TRANSCRIPTION OF NAME", "cp_no": "TRANSCRIPTION OF PHONE NUMBER"}
-          ]
-        }
-        
-        Rules:
-        - Ensure names are in UPPERCASE if they appear written that way.
-        - Clean up phone number formats so they match a standard structure.
-        - Do not output markdown tags like ```json. Return the raw string directly.
+        Ensure names are capitalized exactly as written and phone numbers are cleaned into standard numerical format.
         """
         
         # Implement a retry system for temporary 503 network hiccups
@@ -86,10 +89,14 @@ if uploaded_file is not None:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Utilizing the gemini-2.5-flash-8b high-quota model tier
+                # Utilizing official model naming convention with a strict, lightweight json schema config
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash-8b',
-                    contents=[image, prompt]
+                    model='gemini-2.5-flash',
+                    contents=[image, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=AttendanceLog,
+                    ),
                 )
                 break 
             except APIError as e:
@@ -105,33 +112,21 @@ if uploaded_file is not None:
         
         if response:
             try:
-                # Form clean JSON input from the raw response
-                cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
-                json_data = json.loads(cleaned_response)
-                
+                # Native structural parsing without needing heavy markdown string cleanups
+                json_data = json.loads(response.text)
                 status_text.success("✨ Image Successfully Processed!")
                 
                 # Display Extracted Info Header
                 st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
                 
-                # ==========================================
-                # SAFE DATAFRAME PARSING ROUTINE
-                # ==========================================
+                # Build list cleanly matching your precise Google Sheet Headers
                 raw_records = json_data.get("records", [])
                 cleaned_records = []
                 
                 for record in raw_records:
-                    name_val = record.get("name", "")
-                    cp_val = record.get("cp_no", "")
-                    
-                    if isinstance(cp_val, list):
-                        cp_val = ", ".join(str(x) for x in cp_val)
-                    else:
-                        cp_val = str(cp_val) if cp_val is not None else ""
-                        
                     cleaned_records.append({
-                        "Name": str(name_val).strip(),
-                        "CP no.": cp_val.strip()
+                        "Name": str(record.get("name", "")).strip(),
+                        "CP no.": str(record.get("cp_no", "")).strip()
                     })
 
                 df = pd.DataFrame(cleaned_records, dtype=str)
@@ -160,7 +155,7 @@ if uploaded_file is not None:
                             except gspread.exceptions.SpreadsheetNotFound:
                                 st.error("❌ Spreadsheet Not Found! Ensure your Google Cloud Service Account Email has been added as an 'Editor' on your Google Sheet sharing configurations.")
                             except Exception as e:
-                                f"❌ Sync failed: {e}"
+                                st.error(f"❌ Sync failed: {e}")
                                 
             except json.JSONDecodeError:
                 status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured. Please try uploading again.")
