@@ -1,5 +1,6 @@
 streamlit
 google-genai
+pydantic
 pillow
 pandas
 gspread
