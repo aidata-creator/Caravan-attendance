@@ -53,7 +53,7 @@ def connect_to_sheets():
 st.set_page_config(page_title="Caravan Attendance Automation", layout="wide")
 
 st.title("📋 Caravan Attendance Automation")
-st.write("Upload an image of your handwritten sheet to instantly read and sync data with your Google Sheet.")
+st.write("Upload an image, double-click cells to fix any handwriting misreads, and sync live to Google Sheets.")
 st.write("---")
 
 uploaded_file = st.file_uploader("Upload Log Sheet Image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
@@ -72,11 +72,8 @@ if uploaded_file is not None:
         status_text = st.empty()
         status_text.info("Optimizing image and connecting to Gemini 2.5 Flash...")
         
-        # 🛠️ LIVE IMAGE COMPRESSION ENGINE
-        # Reduces image footprint to prevent request exhaustion blocks
         try:
             img_buffer = io.BytesIO()
-            # Convert to RGB mode if image is PNG/RGBA to allow JPEG saving
             if raw_image.mode in ("RGBA", "P"):
                 processing_img = raw_image.convert("RGB")
             else:
@@ -96,76 +93,97 @@ if uploaded_file is not None:
         Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        response = None
-        max_retries = 3
-        wait_time = 15 
-        
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=[optimized_image, prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=AttendanceLog,
-                    ),
-                )
-                break 
-            except APIError as e:
-                if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
-                    status_text.warning(f"⚠️ Request cooling window active. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                    wait_time *= 2
-                else:
-                    st.error(f"❌ Google API Error: {e}")
-                    st.info("💡 **Quick Fix:** To bypass project constraints entirely, go to Google AI Studio, click the top-left project dropdown, create a **completely new project workspace**, and generate a key there!")
-                    st.stop()
-            except Exception as e:
-                st.error(f"❌ An unexpected error occurred: {e}")
-                st.stop()
-        
-        if response:
-            try:
-                json_data = json.loads(response.text)
-                status_text.success("✨ Image Successfully Processed!")
-                
-                st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
-                
-                raw_records = json_data.get("records", [])
-                cleaned_records = []
-                
-                for record in raw_records:
-                    cleaned_records.append({
-                        "Name": str(record.get("name", "")).strip(),
-                        "CP no.": str(record.get("cp_no", "")).strip()
-                    })
+        # Initialize session state tracking variables so edits persist across button clicks
+        if "parsed_df" not in st.session_state:
+            st.session_state.parsed_df = None
+        if "detected_date" not in st.session_state:
+            st.session_state.detected_date = "Not Found"
+        if "last_uploaded_file" not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
+            st.session_state.parsed_df = None
+            st.session_state.last_uploaded_file = uploaded_file.name
 
-                df = pd.DataFrame(cleaned_records, dtype=str)
-                
-                st.subheader("🔍 Parsed Data Preview")
-                st.dataframe(df, use_container_width=True)
-                
-                # ==========================================
-                # 3. GOOGLE SHEETS SYNC BUTTON
-                # ==========================================
-                if st.button("📤 Push Data to Caravan Attendance Google Sheet"):
-                    with st.spinner("Syncing records into Google Sheets..."):
-                        gc = connect_to_sheets()
-                        if gc:
-                            spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAlc"
+        # Only trigger the API call if we haven't read this specific image yet
+        if st.session_state.parsed_df is None:
+            response = None
+            max_retries = 3
+            wait_time = 15 
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=[optimized_image, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=AttendanceLog,
+                        ),
+                    )
+                    break 
+                except APIError as e:
+                    if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
+                        status_text.warning(f"⚠️ Request cooling window active. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        wait_time *= 2
+                    else:
+                        st.error(f"❌ Google API Error: {e}")
+                        st.stop()
+                except Exception as e:
+                    st.error(f"❌ An unexpected error occurred: {e}")
+                    st.stop()
+            
+            if response:
+                try:
+                    json_data = json.loads(response.text)
+                    st.session_state.detected_date = json_data.get("date", "Not Found")
+                    
+                    raw_records = json_data.get("records", [])
+                    cleaned_records = []
+                    
+                    for record in raw_records:
+                        cleaned_records.append({
+                            "Name": str(record.get("name", "")).strip(),
+                            "CP no.": str(record.get("cp_no", "")).strip()
+                        })
+
+                    st.session_state.parsed_df = pd.DataFrame(cleaned_records, dtype=str)
+                    status_text.success("✨ Image Successfully Processed!")
+                except json.JSONDecodeError:
+                    status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured.")
+                    st.stop()
+
+        # Display results and enable inline data modifications
+        if st.session_state.parsed_df is not None:
+            st.metric(label="Detected Log Date", value=st.session_state.detected_date)
+            
+            st.subheader("📝 Live Data Review (Double-click any cell to edit)")
+            
+            # 🛠️ LIVE DATA EDITOR WIDGET
+            # num_rows="dynamic" lets you manually add or delete rows right from the UI
+            edited_df = st.data_editor(
+                st.session_state.parsed_df, 
+                use_container_width=True, 
+                num_rows="dynamic"
+            )
+            
+            # ==========================================
+            # 3. GOOGLE SHEETS SYNC BUTTON
+            # ==========================================
+            if st.button("📤 Push Final Edited Data to Google Sheet"):
+                with st.spinner("Syncing data into Google Sheets..."):
+                    gc = connect_to_sheets()
+                    if gc:
+                        spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAIc"
+                        
+                        try:
+                            sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
+                            # Pull rows from edited_df instead of original parsed trace data
+                            rows_to_append = edited_df[["Name", "CP no."]].values.tolist()
                             
-                            try:
-                                sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
-                                rows_to_append = df[["Name", "CP no."]].values.tolist()
-                                
-                                sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
-                                st.balloons()
-                                st.success("🎉 Data successfully synced into your 'Caravan Attendance' spreadsheet!")
-                                
-                            except gspread.exceptions.SpreadsheetNotFound:
-                                st.error("❌ Spreadsheet Not Found! Verify email editing permissions.")
-                            except Exception as e:
-                                st.error(f"❌ Sync failed: {e}")
-                                
-            except json.JSONDecodeError:
-                status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured.")
+                            sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+                            st.balloons()
+                            st.success("🎉 Final edited data successfully synced into your spreadsheet!")
+                            
+                        except gspread.exceptions.SpreadsheetNotFound:
+                            st.error("❌ Spreadsheet Not Found! Verify email editing permissions.")
+                        except Exception as e:
+                            st.error(f"❌ Sync failed: {e}")
