@@ -89,4 +89,50 @@ if uploaded_file is not None:
             )
             
             # Form clean JSON input from the raw response
-            cleaned_response = response.text.strip().replace("
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+            json_data = json.loads(cleaned_response)
+            
+            status_text.success("✨ Image Successfully Processed!")
+            
+            # Display Extracted Info Header
+            st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
+            
+            # Format DataFrame columns to match your exact Google Sheet headers
+            df = pd.DataFrame(json_data.get("records", []))
+            df = df.rename(columns={"name": "Name", "cp_no": "CP no."})
+            
+            # Data Preview Grid
+            st.subheader("🔍 Parsed Data Preview")
+            st.dataframe(df, use_container_width=True)
+            
+            # ==========================================
+            # 3. GOOGLE SHEETS SYNC BUTTON
+            # ==========================================
+            if st.button("📤 Push Data to Caravan Attendance Google Sheet"):
+                with st.spinner("Syncing records into Google Sheets..."):
+                    gc = connect_to_sheets()
+                    if gc:
+                        # Your exact Sheet ID
+                        spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAIc"
+                        
+                        try:
+                            # Target the very first worksheet tab
+                            sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
+                            
+                            # Convert dataframe slice to standard array of rows [[Name, CP no.]]
+                            rows_to_append = df[["Name", "CP no."]].values.tolist()
+                            
+                            # Append the data matrix below existing rows
+                            sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+                            st.balloons()
+                            st.success("🎉 Data successfully synced into your 'Caravan Attendance' spreadsheet!")
+                            
+                        except gspread.exceptions.SpreadsheetNotFound:
+                            st.error("❌ Spreadsheet Not Found! Ensure your Google Cloud Service Account Email has been added as an 'Editor' on your Google Sheet sharing configurations.")
+                        except Exception as e:
+                            st.error(f"❌ Sync failed: {e}")
+                            
+        except json.JSONDecodeError:
+            status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured. Please try uploading again.")
+        except Exception as e:
+            status_text.error(f"❌ An error occurred: {e}")
