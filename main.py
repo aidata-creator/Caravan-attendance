@@ -25,14 +25,12 @@ class AttendanceLog(BaseModel):
 # 1. API & CREDENTIALS INITIALIZATION
 # ==========================================
 
-# Initialize the Gemini Client using Streamlit Secrets
 if "GEMINI_API_KEY" in st.secrets:
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 else:
     st.error("❌ Missing API Key: Please set your GEMINI_API_KEY in the Streamlit Secrets panel.")
     st.stop()
 
-# Connect to Google Sheets via Service Account
 def connect_to_sheets():
     try:
         scopes = [
@@ -71,7 +69,7 @@ if uploaded_file is not None:
     with col2:
         st.subheader("⚡ Automation Status")
         status_text = st.empty()
-        status_text.info("Reading handwriting using Gemini... Please wait.")
+        status_text.info("Reading handwriting using Gemini 3 Preview Tiers... Please wait.")
         
         prompt = """
         You are an expert handwriting transcription assistant. Look at the uploaded image and carefully extract all items.
@@ -81,39 +79,58 @@ if uploaded_file is not None:
         Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        # High-resilience loop explicitly built to scale past 429 quota cooling windows
+        # Priority list matching the cascade strategy from your snippet
+        models_to_try = [
+            "gemini-3.0-flash-preview-0514",      # Primary choice (Gemini 3 Flash Preview)
+            "gemini-3.0-flash-lite-preview-0514"  # Fallback choice (Gemini 3 Lite Preview)
+        ]
+        
         response = None
-        max_retries = 5
-        wait_time = 35  # Set a 35s baseline to align with Google's minute-rate limit window
+        success = False
         
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=[image, prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=AttendanceLog,
-                    ),
-                )
-                break 
-            except APIError as e:
-                if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
-                    status_text.warning(f"⚠️ Rate limit cooling window active. Waiting {wait_time}s to auto-retry... (Attempt {attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                    wait_time += 15  # Steadily increase buffer time to guarantee window clearance
-                else:
-                    st.error(f"❌ Google API Quota/Error: {e}")
-                    st.info("💡 Pro-Tip: To completely skip daily reset blocks, link a credit card to your Google AI Studio account under Pay-As-You-Go ($0.0003 per image call).")
-                    st.stop()
-            except Exception as e:
-                st.error(f"❌ An unexpected error occurred: {e}")
-                st.stop()
-        
+        # Loop through each model to bypass local route exhaustion blocks
+        for selected_model in models_to_try:
+            status_text.info(f"🔄 Attempting extraction using model: `{selected_model}`...")
+            
+            # Sub-retry logic to clear standard minute-window rate limits (429/503)
+            max_retries = 2
+            wait_time = 35
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model=selected_model,
+                        contents=[image, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=AttendanceLog,
+                        ),
+                    )
+                    success = True
+                    break # Success! Break out of the retry loop
+                except APIError as e:
+                    if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
+                        status_text.warning(f"⚠️ `{selected_model}` cooling down. Waiting {wait_time}s to retry...")
+                        time.sleep(wait_time)
+                    else:
+                        # Drop out of the retry loop to let the script cascade down to the next model
+                        break
+                except Exception as e:
+                    break
+            
+            if success:
+                break # Break out of model collection loop completely if data was retrieved
+
+        # If all experimental cascade options fail, provide a clear roadmap
+        if not success or not response:
+            st.error("❌ All Free Tier routes are currently exhausted for this API key.")
+            st.info("💡 **Fix:** Link a credit/debit card to your account in Google AI Studio to turn on **Pay-as-you-go billing**. This removes all free blocks instantly. (Processing this sheet costs less than $0.001 total).")
+            st.stop()
+            
         if response:
             try:
                 json_data = json.loads(response.text)
-                status_text.success("✨ Image Successfully Processed!")
+                status_text.success(f"✨ Image Successfully Processed via `{selected_model}`!")
                 
                 st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
                 
