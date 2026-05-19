@@ -39,7 +39,6 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Pulls the structured dict directly from the streamlined TOML format
         secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
@@ -84,12 +83,13 @@ if uploaded_file is not None:
         Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        # Implement a retry system for temporary network hiccups
+        # Smart retry handler tracking both 503 (overloaded) and 429 (rate limits)
         response = None
-        max_retries = 3
+        max_retries = 4
+        wait_time = 5  # Start with a baseline 5-second delay
+        
         for attempt in range(max_retries):
             try:
-                # Utilizing official model naming convention with a strict, lightweight json schema config
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
                     contents=[image, prompt],
@@ -100,11 +100,14 @@ if uploaded_file is not None:
                 )
                 break 
             except APIError as e:
-                if "503" in str(e) and attempt < max_retries - 1:
-                    status_text.warning(f"⚠️ Server is busy (Attempt {attempt + 1}/{max_retries}). Retrying in 2 seconds...")
-                    time.sleep(2)
+                # Handle temporary traffic spikes or cooling rate-limit windows
+                if ("503" in str(e) or "429" in str(e)) and attempt < max_retries - 1:
+                    status_text.warning(f"⚠️ API Limit hit or server busy. Backing off and retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    wait_time *= 3  # Dynamically increase wait period exponentially (5s -> 15s -> 45s)
                 else:
-                    st.error(f"❌ Google API Error: {e}")
+                    st.error(f"❌ Google API Quota/Error: {e}")
+                    st.info("If this is a permanent 429 error, your daily limit of 20 images has completely reset. Consider linking a Google Cloud billing account for unlimited scale.")
                     st.stop()
             except Exception as e:
                 st.error(f"❌ An unexpected error occurred: {e}")
@@ -112,7 +115,6 @@ if uploaded_file is not None:
         
         if response:
             try:
-                # Native structural parsing without needing heavy markdown string cleanups
                 json_data = json.loads(response.text)
                 status_text.success("✨ Image Successfully Processed!")
                 
