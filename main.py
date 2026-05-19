@@ -97,9 +97,29 @@ if uploaded_file is not None:
             # Display Extracted Info Header
             st.metric(label="Detected Log Date", value=json_data.get("date", "Not Found"))
             
-            # Format DataFrame columns to match your exact Google Sheet headers
-            df = pd.DataFrame(json_data.get("records", []))
-            df = df.rename(columns={"name": "Name", "cp_no": "CP no."})
+            # ==========================================
+            # SAFE DATAFRAME PARSING ROUTINE
+            # ==========================================
+            raw_records = json_data.get("records", [])
+            cleaned_records = []
+            
+            for record in raw_records:
+                name_val = record.get("name", "")
+                cp_val = record.get("cp_no", "")
+                
+                # If cp_no accidentally returns as a list from AI, safely flatten it
+                if isinstance(cp_val, list):
+                    cp_val = ", ".join(str(x) for x in cp_val)
+                else:
+                    cp_val = str(cp_val) if cp_val is not None else ""
+                    
+                cleaned_records.append({
+                    "Name": str(name_val).strip(),
+                    "CP no.": cp_val.strip()
+                })
+
+            # Safely build the DataFrame with strict string data types
+            df = pd.DataFrame(cleaned_records, dtype=str)
             
             # Data Preview Grid
             st.subheader("🔍 Parsed Data Preview")
