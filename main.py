@@ -26,13 +26,14 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        secret_credentials = json.loads(st.secrets["gspread"]["service_account"])
+        # Pulls the dictionary directly from the streamlined TOML configuration
+        secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
         return gc
     except Exception as e:
         st.error(f"❌ Failed to authenticate with Google Sheets API: {e}")
-        st.info("Check if your 'service_account' string in Streamlit Secrets is complete and valid JSON.")
+        st.info("Check if your secrets configuration under [gspread.service_account] has any missing fields.")
         return None
 
 # ==========================================
@@ -89,7 +90,7 @@ if uploaded_file is not None:
                     model='gemini-2.5-flash',
                     contents=[image, prompt]
                 )
-                break # Break loop if successful
+                break 
             except APIError as e:
                 if "503" in str(e) and attempt < max_retries - 1:
                     status_text.warning(f"⚠️ Server is busy (Attempt {attempt + 1}/{max_retries}). Retrying in 2 seconds...")
