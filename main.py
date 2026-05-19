@@ -37,7 +37,6 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Robust dictionary parser to bypass JSON string exceptions
         secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
@@ -53,7 +52,6 @@ def connect_to_sheets():
 st.set_page_config(page_title="Caravan Attendance Automation", layout="wide")
 
 st.title("📋 Caravan Attendance Automation")
-st.write("Upload an image of your handwritten sheet to instantly read and sync data with your Google Sheet.")
 st.write("---")
 
 uploaded_file = st.file_uploader("Upload Log Sheet Image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
@@ -70,61 +68,51 @@ if uploaded_file is not None:
     with col2:
         st.subheader("⚡ Automation Status")
         status_text = st.empty()
-        status_text.info("Reading handwriting using Gemini 3 Preview Tiers... Please wait.")
         
         prompt = """
         You are an expert handwriting transcription assistant. Look at the uploaded image and carefully extract all items.
         1. Find the log sheet date written at the top.
         2. Transcribe every single person's Name and their CP no. (Contact/Phone Number). 
-        
-        Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
         # Explicitly targeted Gemini 3 model paths
         models_to_try = [
-            "gemini-3.0-flash-preview-0514",      # Primary Gemini 3 Choice
-            "gemini-3.0-flash-lite-preview-0514"  # Fallback Gemini 3 Lite Choice
+            "gemini-3.0-flash-preview-0514",
+            "gemini-3.0-flash-lite-preview-0514"
         ]
         
         response = None
         success = False
         selected_model = ""
         
-        # Multi-model fallback execution sequence
+        # We will collect the real error tracking trace here
+        error_logs = []
+        
         for current_model in models_to_try:
             status_text.info(f"🔄 Attempting extraction using model: `{current_model}`...")
             
-            max_retries = 2
-            wait_time = 35
-            
-            for attempt in range(max_retries):
-                try:
-                    response = client.models.generate_content(
-                        model=current_model,
-                        contents=[image, prompt],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=AttendanceLog,
-                        ),
-                    )
-                    success = True
-                    selected_model = current_model
-                    break 
-                except APIError as e:
-                    if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
-                        status_text.warning(f"⚠️ `{current_model}` rate limited. Waiting {wait_time}s to retry...")
-                        time.sleep(wait_time)
-                    else:
-                        break  # Fall back to next model string
-                except Exception as e:
-                    break
-            
-            if success:
-                break
+            try:
+                response = client.models.generate_content(
+                    model=current_model,
+                    contents=[image, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=AttendanceLog,
+                    ),
+                )
+                success = True
+                selected_model = current_model
+                break 
+            except APIError as e:
+                error_logs.append(f"APIError on `{current_model}`: {str(e)}")
+            except Exception as e:
+                error_logs.append(f"Unexpected Exception on `{current_model}`: {str(e)}")
 
         if not success or not response:
-            st.error("❌ All targeted Gemini 3 free paths are exhausted for this project token key.")
-            st.info("💡 **Fix:** Add a card inside Google AI Studio under Pay-As-You-Go billing to bypass the 20-request daily block completely. Each sheet costs less than $0.001 to run!")
+            st.error("❌ Execution Stopped: Code encountered deep execution errors.")
+            st.subheader("🚨 Real Underlying Error Trace Logs:")
+            for log in error_logs:
+                st.code(log)
             st.stop()
             
         if response:
@@ -136,7 +124,6 @@ if uploaded_file is not None:
                 
                 raw_records = json_data.get("records", [])
                 cleaned_records = []
-                
                 for record in raw_records:
                     cleaned_records.append({
                         "Name": str(record.get("name", "")).strip(),
@@ -144,29 +131,19 @@ if uploaded_file is not None:
                     })
 
                 df = pd.DataFrame(cleaned_records, dtype=str)
-                
-                st.subheader("🔍 Parsed Data Preview")
                 st.dataframe(df, use_container_width=True)
                 
-                # ==========================================
-                # 3. GOOGLE SHEETS SYNC BUTTON
-                # ==========================================
                 if st.button("📤 Push Data to Caravan Attendance Google Sheet"):
-                    with st.spinner("Syncing records into Google Sheets..."):
+                    with st.spinner("Syncing..."):
                         gc = connect_to_sheets()
                         if gc:
                             spreadsheet_id = "1bbJJY1XpuT-TZDoIQLiYQMMdmut85ewLneeD3CbbAIc"
-                            
                             try:
                                 sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
                                 rows_to_append = df[["Name", "CP no."]].values.tolist()
-                                
                                 sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
                                 st.balloons()
-                                st.success("🎉 Data successfully synced into your 'Caravan Attendance' spreadsheet!")
-                                
-                            except gspread.exceptions.SpreadsheetNotFound:
-                                st.error("❌ Spreadsheet Not Found! Verify email editing permissions.")
+                                st.success("🎉 Data successfully synced!")
                             except Exception as e:
                                 st.error(f"❌ Sync failed: {e}")
                                 
