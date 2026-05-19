@@ -81,10 +81,10 @@ if uploaded_file is not None:
         1. Find the log sheet date written at the top.
         2. Transcribe every single person's Name and their CP no. (Contact/Phone Number). 
         
-        Ensure names are capitalized exactly as written and phone numbers are cleaned into standard numerical format.
+        Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        # Implement a retry system for temporary 503 network hiccups
+        # Implement a retry system for temporary network hiccups
         response = None
         max_retries = 3
         for attempt in range(max_retries):
