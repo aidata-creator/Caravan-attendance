@@ -37,6 +37,7 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
+        # Robust dictionary parser to bypass JSON string exceptions
         secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
@@ -79,27 +80,27 @@ if uploaded_file is not None:
         Ensure names are capitalized exactly as written and phone numbers are cleaned into a standard numerical string format.
         """
         
-        # Priority list matching the cascade strategy from your snippet
+        # Explicitly targeted Gemini 3 model paths
         models_to_try = [
-            "gemini-3.0-flash-preview-0514",      # Primary choice (Gemini 3 Flash Preview)
-            "gemini-3.0-flash-lite-preview-0514"  # Fallback choice (Gemini 3 Lite Preview)
+            "gemini-3.0-flash-preview-0514",      # Primary Gemini 3 Choice
+            "gemini-3.0-flash-lite-preview-0514"  # Fallback Gemini 3 Lite Choice
         ]
         
         response = None
         success = False
+        selected_model = ""
         
-        # Loop through each model to bypass local route exhaustion blocks
-        for selected_model in models_to_try:
-            status_text.info(f"🔄 Attempting extraction using model: `{selected_model}`...")
+        # Multi-model fallback execution sequence
+        for current_model in models_to_try:
+            status_text.info(f"🔄 Attempting extraction using model: `{current_model}`...")
             
-            # Sub-retry logic to clear standard minute-window rate limits (429/503)
             max_retries = 2
             wait_time = 35
             
             for attempt in range(max_retries):
                 try:
                     response = client.models.generate_content(
-                        model=selected_model,
+                        model=current_model,
                         contents=[image, prompt],
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
@@ -107,24 +108,23 @@ if uploaded_file is not None:
                         ),
                     )
                     success = True
-                    break # Success! Break out of the retry loop
+                    selected_model = current_model
+                    break 
                 except APIError as e:
                     if ("429" in str(e) or "503" in str(e)) and attempt < max_retries - 1:
-                        status_text.warning(f"⚠️ `{selected_model}` cooling down. Waiting {wait_time}s to retry...")
+                        status_text.warning(f"⚠️ `{current_model}` rate limited. Waiting {wait_time}s to retry...")
                         time.sleep(wait_time)
                     else:
-                        # Drop out of the retry loop to let the script cascade down to the next model
-                        break
+                        break  # Fall back to next model string
                 except Exception as e:
                     break
             
             if success:
-                break # Break out of model collection loop completely if data was retrieved
+                break
 
-        # If all experimental cascade options fail, provide a clear roadmap
         if not success or not response:
-            st.error("❌ All Free Tier routes are currently exhausted for this API key.")
-            st.info("💡 **Fix:** Link a credit/debit card to your account in Google AI Studio to turn on **Pay-as-you-go billing**. This removes all free blocks instantly. (Processing this sheet costs less than $0.001 total).")
+            st.error("❌ All targeted Gemini 3 free paths are exhausted for this project token key.")
+            st.info("💡 **Fix:** Add a card inside Google AI Studio under Pay-As-You-Go billing to bypass the 20-request daily block completely. Each sheet costs less than $0.001 to run!")
             st.stop()
             
         if response:
@@ -166,7 +166,7 @@ if uploaded_file is not None:
                                 st.success("🎉 Data successfully synced into your 'Caravan Attendance' spreadsheet!")
                                 
                             except gspread.exceptions.SpreadsheetNotFound:
-                                st.error("❌ Spreadsheet Not Found! Check email editing permissions.")
+                                st.error("❌ Spreadsheet Not Found! Verify email editing permissions.")
                             except Exception as e:
                                 st.error(f"❌ Sync failed: {e}")
                                 
