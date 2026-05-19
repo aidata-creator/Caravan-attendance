@@ -26,7 +26,7 @@ def connect_to_sheets():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Pulls the dictionary directly from the streamlined TOML configuration
+        # Pulls the structured dict directly from the new streamlined TOML format
         secret_credentials = dict(st.secrets["gspread"]["service_account"])
         creds = Credentials.from_service_account_info(secret_credentials, scopes=scopes)
         gc = gspread.authorize(creds)
@@ -86,8 +86,9 @@ if uploaded_file is not None:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Utilizing the gemini-2.5-flash-8b high-quota model tier
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.5-flash-8b',
                     contents=[image, prompt]
                 )
                 break 
@@ -159,7 +160,7 @@ if uploaded_file is not None:
                             except gspread.exceptions.SpreadsheetNotFound:
                                 st.error("❌ Spreadsheet Not Found! Ensure your Google Cloud Service Account Email has been added as an 'Editor' on your Google Sheet sharing configurations.")
                             except Exception as e:
-                                st.error(f"❌ Sync failed: {e}")
+                                f"❌ Sync failed: {e}"
                                 
             except json.JSONDecodeError:
                 status_text.error("❌ Processing failed: The returned AI output wasn't cleanly structured. Please try uploading again.")
